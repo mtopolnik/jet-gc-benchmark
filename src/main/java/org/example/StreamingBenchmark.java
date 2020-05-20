@@ -2,7 +2,8 @@ package org.example;
 
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
-import com.hazelcast.jet.config.JetConfig;
+import com.hazelcast.jet.Job;
+import com.hazelcast.jet.config.JobConfig;
 import com.hazelcast.jet.pipeline.Pipeline;
 import com.hazelcast.jet.pipeline.Sinks;
 import com.hazelcast.jet.pipeline.SourceBuilder;
@@ -10,8 +11,9 @@ import com.hazelcast.jet.pipeline.SourceBuilder.TimestampedSourceBuffer;
 import com.hazelcast.jet.pipeline.StreamSource;
 import com.hazelcast.jet.pipeline.StreamStage;
 
+import static com.hazelcast.jet.aggregate.AggregateOperations.averagingLong;
 import static com.hazelcast.jet.aggregate.AggregateOperations.counting;
-import static com.hazelcast.jet.aggregate.AggregateOperations.linearTrend;
+import static com.hazelcast.jet.config.ProcessingGuarantee.EXACTLY_ONCE;
 import static com.hazelcast.jet.pipeline.WindowDefinition.sliding;
 import static com.hazelcast.jet.pipeline.WindowDefinition.tumbling;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -21,9 +23,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class StreamingBenchmark {
     private static final long EVENTS_PER_SECOND = 1_000_000;
-    private static final long NUM_KEYS = 5_000_000;
+    private static final long NUM_KEYS = 100_000;
     private static final long WIN_SIZE_MILLIS = 10_000;
-    private static final long SLIDING_STEP_MILLIS = 1_000;
+    private static final long SLIDING_STEP_MILLIS = 100;
 
     private static final long INITIAL_DELAY_SECONDS = 0;
     private static final long DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR = 10_000;
@@ -32,21 +34,18 @@ public class StreamingBenchmark {
 
     public static void main(String[] args) {
         Pipeline pipeline = buildPipeline();
-        JetConfig cfg = new JetConfig();
-        cfg.getDefaultEdgeConfig().setQueueSize(256);
-        JetInstance jet = Jet.newJetInstance(cfg);
-        try {
-            jet.newJob(pipeline).join();
-        } finally {
-            Jet.shutdownAll();
-        }
+        JetInstance jet = Jet.bootstrappedInstance();
+        JobConfig jobCfg = new JobConfig()
+                .setProcessingGuarantee(EXACTLY_ONCE);
+        Job job = jet.newJob(pipeline, jobCfg);
+        Runtime.getRuntime().addShutdownHook(new Thread(job::cancel));
+        job.join();
     }
 
     private static Pipeline buildPipeline() {
         Pipeline p = Pipeline.create();
         StreamStage<Long> source = p.readFrom(longSource(EVENTS_PER_SECOND))
-                                    .withNativeTimestamps(0)
-                                    .rebalance();
+                                    .withNativeTimestamps(0);
         source.groupingKey(n -> n % NUM_KEYS)
               .window(sliding(WIN_SIZE_MILLIS, SLIDING_STEP_MILLIS))
               .aggregate(counting())
