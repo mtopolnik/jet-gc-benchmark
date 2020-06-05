@@ -12,6 +12,7 @@ import com.hazelcast.jet.pipeline.StreamSource;
 import com.hazelcast.jet.pipeline.StreamStage;
 
 import static com.hazelcast.jet.aggregate.AggregateOperations.counting;
+import static com.hazelcast.jet.config.ProcessingGuarantee.EXACTLY_ONCE;
 import static com.hazelcast.jet.pipeline.ServiceFactories.nonSharedService;
 import static com.hazelcast.jet.pipeline.WindowDefinition.sliding;
 import static com.hazelcast.jet.pipeline.WindowDefinition.tumbling;
@@ -21,9 +22,9 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class StreamingBenchmark {
     private static final long EVENTS_PER_SECOND = 1_000_000;
-    private static final long NUM_KEYS = 30_000_000;
-    private static final long WIN_SIZE_MILLIS = 48_000;
-    private static final long SLIDING_STEP_MILLIS = 1_000;
+    private static final long NUM_KEYS = 200_000;
+    private static final long WIN_SIZE_MILLIS = 10_000;
+    private static final long SLIDING_STEP_MILLIS = 100;
 
     private static final long INITIAL_DELAY_SECONDS = 0;
     private static final long DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR = 10_000;
@@ -41,7 +42,7 @@ public class StreamingBenchmark {
         Pipeline pipeline = buildPipeline();
         JetInstance jet = Jet.bootstrappedInstance();
         JobConfig jobCfg = new JobConfig()
-//                .setProcessingGuarantee(EXACTLY_ONCE)
+                .setProcessingGuarantee(EXACTLY_ONCE)
                 ;
         Job job = jet.newJob(pipeline, jobCfg);
         Runtime.getRuntime().addShutdownHook(new Thread(job::cancel));
