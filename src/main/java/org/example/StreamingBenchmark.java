@@ -53,8 +53,7 @@ public class StreamingBenchmark {
         Pipeline p = Pipeline.create();
         StreamStage<Long> source = p.readFrom(longSource(EVENTS_PER_SECOND))
                                     .withNativeTimestamps(0)
-                                    .groupingKey(n -> n % NUM_KEYS)
-                                    .mapUsingService(nonSharedService(x -> null), (s, k, t) -> t);
+                                    .rebalance();
         source.groupingKey(n -> n % NUM_KEYS)
               .window(sliding(WIN_SIZE_MILLIS, SLIDING_STEP_MILLIS))
               .aggregate(counting())
