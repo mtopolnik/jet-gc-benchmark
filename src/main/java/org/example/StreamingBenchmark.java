@@ -42,7 +42,7 @@ public class StreamingBenchmark {
         Pipeline pipeline = buildPipeline();
         JetInstance jet = Jet.bootstrappedInstance();
         JobConfig jobCfg = new JobConfig()
-                .setProcessingGuarantee(EXACTLY_ONCE)
+//                .setProcessingGuarantee(EXACTLY_ONCE)
                 ;
         Job job = jet.newJob(pipeline, jobCfg);
         Runtime.getRuntime().addShutdownHook(new Thread(job::cancel));
