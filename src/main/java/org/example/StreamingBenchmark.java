@@ -22,8 +22,8 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class StreamingBenchmark {
     private static final long EVENTS_PER_SECOND = 1_000_000;
-    private static final long NUM_KEYS = 200_000;
-    private static final long WIN_SIZE_MILLIS = 10_000;
+    private static final long NUM_KEYS = 50_000;
+    private static final long WIN_SIZE_MILLIS = 30_000;
     private static final long SLIDING_STEP_MILLIS = 100;
 
     private static final long INITIAL_DELAY_SECONDS = 0;
