@@ -27,12 +27,12 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class StreamingRound2 {
     private static final long EVENTS_PER_SECOND = 1_000_000;
-    private static final long NUM_KEYS = 40_000;
+    private static final long NUM_KEYS = 10_000;
     private static final long WIN_SIZE_MILLIS = 10_000;
-    private static final long SLIDING_STEP_MILLIS = 100;
+    private static final long SLIDING_STEP_MILLIS = 10;
 
     private static final long WARMUP_TIME_MILLIS = SECONDS.toMillis(20);
-    private static final long MEASUREMENT_TIME_MILLIS = MINUTES.toMillis(3);
+    private static final long MEASUREMENT_TIME_MILLIS = MINUTES.toMillis(4);
 
     private static final long DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR = 10_000;
     private static final long SOURCE_THROUGHPUT_REPORTING_PERIOD_SECONDS = 1;
