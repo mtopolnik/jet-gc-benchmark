@@ -3,8 +3,8 @@ package org.example;
 import com.hazelcast.jet.Jet;
 import com.hazelcast.jet.JetInstance;
 import com.hazelcast.jet.Job;
-import com.hazelcast.jet.accumulator.LongAccumulator;
-import com.hazelcast.jet.datamodel.Tuple3;
+import com.hazelcast.jet.datamodel.KeyedWindowResult;
+import com.hazelcast.jet.datamodel.Tuple2;
 import com.hazelcast.jet.pipeline.Pipeline;
 import com.hazelcast.jet.pipeline.Sinks;
 import com.hazelcast.jet.pipeline.SourceBuilder;
@@ -17,10 +17,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 
 import static com.hazelcast.jet.aggregate.AggregateOperations.counting;
-import static com.hazelcast.jet.datamodel.Tuple3.tuple3;
+import static com.hazelcast.jet.datamodel.Tuple2.tuple2;
 import static com.hazelcast.jet.pipeline.WindowDefinition.sliding;
-import static com.hazelcast.jet.pipeline.WindowDefinition.tumbling;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static java.util.concurrent.TimeUnit.HOURS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -33,10 +32,11 @@ public class StreamingRound2 {
 
     private static final long WARMUP_TIME_MILLIS = SECONDS.toMillis(20);
     private static final long MEASUREMENT_TIME_MILLIS = MINUTES.toMillis(4);
+    private static final long TOTAL_TIME_MILLIS = WARMUP_TIME_MILLIS + MEASUREMENT_TIME_MILLIS;
 
-    private static final long DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR = 10_000;
+    private static final long DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR = 1_000;
     private static final long SOURCE_THROUGHPUT_REPORTING_PERIOD_SECONDS = 1;
-    private static final long SIMPLE_TIME_SPAN_SECONDS = 10_000;
+    private static final long SIMPLE_TIME_SPAN_MILLIS = HOURS.toMillis(3);
 
     public static void main(String[] args) {
         System.out.printf(
@@ -61,59 +61,75 @@ public class StreamingRound2 {
         StreamStage<Long> source = p.readFrom(longSource(EVENTS_PER_SECOND))
                                     .withNativeTimestamps(0)
                                     .rebalance();
-        source.groupingKey(n -> n % NUM_KEYS)
-              .window(sliding(WIN_SIZE_MILLIS, SLIDING_STEP_MILLIS))
-              .aggregate(counting())
-              .filter(kwr -> kwr.getKey() % DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR == 0)
-              .window(tumbling(SLIDING_STEP_MILLIS))
-              .aggregate(counting())
-              .map(wr -> {
-                  Tuple3<Long, Long, Long> t3 = tuple3(
-                          wr.end(),
-                          System.currentTimeMillis() - wr.end(),
-                          wr.result() * DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR);
-                  System.out.format("time %,d: latency %,d ms, cca. %,d keys%n",
-                          simpleTime(t3.f0()),
-                          t3.f1(),
-                          t3.f2());
-                  return t3;
-              }).setLocalParallelism(1)
-              .mapStateful(LongAccumulator::new, (timeToStart, t3) -> {
-                  if (timeToStart.get() == 0) {
-                      timeToStart.set(t3.f0() + WARMUP_TIME_MILLIS);
-                  }
-                  if (t3.f0() < timeToStart.get()) {
-                      System.out.println("Warming up");
-                      return null;
-                  }
-                  return t3;
-              })
-              .mapStateful(() -> new Object[] { new Histogram(5), null }, (state, t3) -> {
-                  Histogram histogram = (Histogram) state[0];
-                  if (histogram == null) {
-                      System.out.println("Benchmarking is done");
-                      return null;
-                  }
-                  if (state[1] == null) {
-                      state[1] = t3.f0();
-                  }
-                  long start = (long) state[1];
-                  if (t3.f0() < start + MEASUREMENT_TIME_MILLIS) {
-                      histogram.recordValue(t3.f1());
-                      return null;
-                  }
-                  try {
-                      return exportHistogram(histogram);
-                  } finally {
-                      state[0] = null;
-                  }
-              })
-              .filter(histogram -> {
-                  System.out.println(histogram);
-                  return true;
-              })
-              .writeTo(Sinks.files("/home/ec2-user"));
+        StreamStage<Tuple2<Long, Long>> latencies = source
+                .groupingKey(n -> n % NUM_KEYS)
+                .window(sliding(WIN_SIZE_MILLIS, SLIDING_STEP_MILLIS))
+                .aggregate(counting())
+                .filter(kwr -> kwr.getKey() % DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR == 0)
+                .mapStateful(DetermineLatency::new, DetermineLatency::map);
+
+        latencies.filter(t2 -> t2.f0() < TOTAL_TIME_MILLIS)
+                 .map(t2 -> String.format("%d,%d", t2.f0(), t2.f1()))
+                 .writeTo(Sinks.files("/home/ec2-user/laten"));
+        latencies
+              .mapStateful(RecordLatencyHistogram::new, RecordLatencyHistogram::map)
+              .writeTo(Sinks.files("/home/ec2-user/bench"));
+
         return p;
+    }
+
+    private static class DetermineLatency {
+        private long startTimestamp;
+        private long lastTimestamp;
+
+        Tuple2<Long, Long> map(KeyedWindowResult<Long, Long> kwr) {
+            long timestamp = kwr.end();
+            if (timestamp <= lastTimestamp) {
+                return null;
+            }
+            if (lastTimestamp == 0) {
+                startTimestamp = timestamp;
+            }
+            lastTimestamp = timestamp;
+
+            long latency = System.currentTimeMillis() - timestamp;
+            long count = kwr.result();
+            if (latency == -1) { // very low latencies may be reported as negative due to clock skew
+                latency = 0;
+            }
+            if (latency < 0) {
+                throw new RuntimeException("Negative latency: " + latency);
+            }
+
+            System.out.format("time %,d: latency %,d ms, key %,d, count %,d%n",
+                    simpleTime(timestamp), latency, kwr.getKey(), count);
+            return tuple2(timestamp - startTimestamp, latency);
+        }
+    }
+
+    private static class RecordLatencyHistogram {
+        private Histogram histogram = new Histogram(5);
+
+        String map(Tuple2<Long, Long> timestampAndLatency) {
+            if (histogram == null) {
+                System.out.println("Benchmarking is done");
+                return null;
+            }
+            long timestamp = timestampAndLatency.f0();
+            if (timestamp < WARMUP_TIME_MILLIS) {
+                System.out.println("Warming up");
+            } else {
+                histogram.recordValue(timestampAndLatency.f1());
+            }
+            if (timestamp >= TOTAL_TIME_MILLIS) {
+                try {
+                    return exportHistogram(histogram);
+                } finally {
+                    histogram = null;
+                }
+            }
+            return null;
+        }
     }
 
     @SuppressWarnings("SameParameterValue")
@@ -126,7 +142,7 @@ public class StreamingRound2 {
 
     private static class LongSource {
         private static final long REPORT_PERIOD_NANOS = SECONDS.toNanos(SOURCE_THROUGHPUT_REPORTING_PERIOD_SECONDS);
-        private static final long HICCUP_REPORT_THRESHOLD_MILLIS = 200;
+        private static final long HICCUP_REPORT_THRESHOLD_MILLIS = 10;
         private final long nanoTimeMillisToCurrentTimeMillis = determineTimeOffset();
         private final long emitPeriod;
         private long counter;
@@ -177,12 +193,12 @@ public class StreamingRound2 {
     }
 
     private static long determineTimeOffset() {
-        long nanoTime = System.nanoTime();
         long milliTime = System.currentTimeMillis();
+        long nanoTime = System.nanoTime();
         return NANOSECONDS.toMillis(nanoTime) - milliTime;
     }
 
     private static long simpleTime(long timeMillis) {
-        return MILLISECONDS.toSeconds(timeMillis) % SIMPLE_TIME_SPAN_SECONDS;
+        return timeMillis % SIMPLE_TIME_SPAN_MILLIS;
     }
 }
