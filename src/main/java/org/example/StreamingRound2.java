@@ -26,7 +26,7 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class StreamingRound2 {
     private static final long EVENTS_PER_SECOND = 1_000_000;
-    private static final long NUM_KEYS = 10_000;
+    private static final long NUM_KEYS = 185_000;
     private static final long WIN_SIZE_MILLIS = 10_000;
     private static final long SLIDING_STEP_MILLIS = 10;
 
@@ -111,14 +111,16 @@ public class StreamingRound2 {
         private Histogram histogram = new Histogram(5);
 
         String map(Tuple2<Long, Long> timestampAndLatency) {
+            long timestamp = timestampAndLatency.f0();
+            String timeMsg = String.format("%,d ", TOTAL_TIME_MILLIS - timestamp);
             if (histogram == null) {
-                System.out.println("Benchmarking is done");
+                System.out.format("benchmarking is done -- %s", timeMsg);
                 return null;
             }
-            long timestamp = timestampAndLatency.f0();
             if (timestamp < WARMUP_TIME_MILLIS) {
-                System.out.println("Warming up");
+                System.out.format("warming up -- %s", timeMsg);
             } else {
+                System.out.print(timeMsg);
                 histogram.recordValue(timestampAndLatency.f1());
             }
             if (timestamp >= TOTAL_TIME_MILLIS) {
