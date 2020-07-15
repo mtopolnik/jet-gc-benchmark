@@ -23,7 +23,7 @@ public class ClusterBatchBenchmark {
     private static final int SOURCE_STEP = 10;
     private static final long NUM_KEYS = 500_000_000;
 
-    public static void main(String[] args) throws Exception {
+    public static void main(String[] args) {
         Pipeline p = Pipeline.create();
         p.readFrom(longSource())
          .rebalance()
