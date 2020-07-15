@@ -40,7 +40,7 @@
                         <configuration>
                             <archive>
                                 <manifest>
-                                    <mainClass>org.example.StreamingRound2</mainClass>
+                                    <mainClass>org.example.StreamingRound3</mainClass>
                                 </manifest>
                             </archive>
                             <descriptorRefs>
