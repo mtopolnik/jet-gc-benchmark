@@ -34,19 +34,19 @@ import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class StreamingRound3 {
     private static final long EVENTS_PER_SECOND = 1_000_000;
-    private static final long NUM_KEYS = 100_000;
-    private static final long WIN_SIZE_MILLIS = 1_000;
+    private static final long NUM_KEYS = 90_000;
+    private static final long WIN_SIZE_MILLIS = 10_000;
     private static final long SLIDING_STEP_MILLIS = 10;
-    private static final int SOURCE_LOCAL_PARALLELISM = -1;
 
     private static final long INITIAL_SOURCE_DELAY_MILLIS = 10;
-    private static final long LATENCY_REPORTING_THRESHOLD = 7;
+    private static final long LATENCY_REPORTING_THRESHOLD = 3;
     private static final long WARMUP_TIME_MILLIS = SECONDS.toMillis(20);
     private static final long MEASUREMENT_TIME_MILLIS = MINUTES.toMillis(4);
     private static final long TOTAL_TIME_MILLIS = WARMUP_TIME_MILLIS + MEASUREMENT_TIME_MILLIS;
 
     private static final long DIAGNOSTIC_KEYSET_DOWNSAMPLING_FACTOR = 1_000;
-    private static final long SOURCE_THROUGHPUT_REPORTING_PERIOD_SECONDS = 10;
+    private static final long SOURCE_THROUGHPUT_REPORTING_PERIOD_MILLIS = 10;
+    static final int THROUGHPUT_REPORTING_THRESHOLD = 3_000_000;
     private static final long SIMPLE_TIME_SPAN_MILLIS = HOURS.toMillis(3);
 
     public static void main(String[] args) {
@@ -55,10 +55,9 @@ public class StreamingRound3 {
                 "%,d keys%n" +
                 "%,d milliseconds sliding window%n" +
                 "%,d milliseconds sliding step%n" +
-                "%,d milliseconds warmup%n" +
-                "%,d milliseconds measurement%n",
+                "%,d milliseconds latency reporting threshold%n",
                 EVENTS_PER_SECOND, NUM_KEYS, WIN_SIZE_MILLIS, SLIDING_STEP_MILLIS,
-                WARMUP_TIME_MILLIS, MEASUREMENT_TIME_MILLIS
+                LATENCY_REPORTING_THRESHOLD
         );
         Pipeline pipeline = buildPipeline();
         JetInstance jet = Jet.bootstrappedInstance();
@@ -156,17 +155,17 @@ public class StreamingRound3 {
     @SuppressWarnings("SameParameterValue")
     private static StreamSource<Long> longSource(long itemsPerSecond, long initialDelay) {
         return Sources.streamFromProcessorWithWatermarks("longs", true, eventTimePolicy -> ProcessorMetaSupplier.of(
-                SOURCE_LOCAL_PARALLELISM,
                 (Address ignored) -> {
                     long startTime = System.currentTimeMillis() + initialDelay;
                     return ProcessorSupplier.of(() ->
-                            new LongSourceP(startTime, itemsPerSecond, eventTimePolicy, false));
+                            new LongSourceP(startTime, itemsPerSecond, eventTimePolicy, true));
                 })
         );
     }
 
     private static class LongSourceP extends AbstractProcessor {
-        private static final long REPORT_PERIOD_NANOS = SECONDS.toNanos(SOURCE_THROUGHPUT_REPORTING_PERIOD_SECONDS);
+        private static final long THROUGHPUT_REPORT_PERIOD_NANOS =
+                MILLISECONDS.toNanos(SOURCE_THROUGHPUT_REPORTING_PERIOD_MILLIS);
         private static final long HICCUP_REPORT_THRESHOLD_MILLIS = 10;
         private final long nanoTimeMillisToCurrentTimeMillis = determineTimeOffset();
         private final long startTime;
@@ -212,8 +211,8 @@ public class StreamingRound3 {
         @Override
         public boolean complete() {
             nowNanos = System.nanoTime();
-            detectAndReportHiccup();
             emitEvents();
+            detectAndReportHiccup();
             if (isReportingThroughput) {
                 reportThroughput();
             }
@@ -244,17 +243,20 @@ public class StreamingRound3 {
 
         private void reportThroughput() {
             long nanosSinceLastReport = nowNanos - lastReport;
-            if (nanosSinceLastReport < REPORT_PERIOD_NANOS) {
+            if (nanosSinceLastReport < THROUGHPUT_REPORT_PERIOD_NANOS) {
                 return;
             }
             lastReport = nowNanos;
             long itemCountSinceLastReport = counter - counterAtLastReport;
             counterAtLastReport = counter;
-            System.out.printf("%,d p%d: %,.0f items/second%n",
-                    simpleTime(NANOSECONDS.toMillis(nowNanos)),
-                    globalProcessorIndex,
-                    itemCountSinceLastReport / ((double) nanosSinceLastReport / SECONDS.toNanos(1))
-            );
+            double throughput = itemCountSinceLastReport / ((double) nanosSinceLastReport / SECONDS.toNanos(1));
+            if (throughput >= (double) THROUGHPUT_REPORTING_THRESHOLD / totalParallelism) {
+                System.out.printf("%,d p%d: %,.0f items/second%n",
+                        simpleTime(NANOSECONDS.toMillis(nowNanos)),
+                        globalProcessorIndex,
+                        throughput
+                );
+            }
         }
 
         @Override
